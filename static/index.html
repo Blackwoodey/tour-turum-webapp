@@ -10,24 +10,32 @@
   <!-- Подключаем H3-библиотеку -->
   <script src="https://unpkg.com/h3-js@3.7.2/dist/h3-js.umd.js"></script>
   <style>
-    body { font-family: Arial, sans-serif; text-align: center; }
-    #map { width: 100%; height: 500px; margin-top: 20px; }
+    /* Полноэкранный режим для карты */
+    html, body {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+      width: 100%;
+      overflow: hidden;
+    }
+    #map {
+      width: 100vw;
+      height: 100vh;
+    }
   </style>
 </head>
 <body>
-  <h1>Tour-Turum</h1>
+  <!-- Убраны заголовок и блок с координатами -->
   <div id="map"></div>
-  <p id="status"></p>
 
   <script>
     let map, placemark;
-    let fogOverlays = {};    // текущие отрисованные полигоны тумана
+    let fogOverlays = {};    // отрисованные полигоны тумана
     let visitedHexes = {};   // посещённые H3-ячейки
 
-    // Уровень разрешения H3 (чем выше число, тем мельче ячейки, так что для меньших гексов можно увеличить число)
+    // Уровень разрешения H3 (чем выше число, тем мельче ячейки)
     const H3_RESOLUTION = 9;
-
-    // Запасной центр (если геолокация не доступна) – Нижний Новгород
+    // Запасной центр (если не доступна геолокация) – Нижний Новгород
     const FALLBACK_CENTER = [56.326887, 44.005986];
     const FALLBACK_ZOOM = 12;
 
@@ -36,13 +44,13 @@
         Telegram.WebApp.ready();
         console.log("Telegram WebApp готов");
       }
-      // Сначала пытаемся получить координаты пользователя
+      // Получаем начальные координаты пользователя
       navigator.geolocation.getCurrentPosition(
         (pos) => {
           const lat = pos.coords.latitude;
           const lon = pos.coords.longitude;
           console.log("Геолокация получена:", lat, lon);
-          ymaps.ready(() => initMap([lat, lon], 14)); // например, зум 14 для детальности
+          ymaps.ready(() => initMap([lat, lon], 14));
         },
         (err) => {
           console.warn("Не удалось получить геолокацию:", err.message);
@@ -57,11 +65,14 @@
       map = new ymaps.Map("map", {
         center: centerCoords,
         zoom: zoomLevel,
-        controls: []
+        controls: []  // Отключаем стандартные элементы управления
+      }, {
+        suppressMapOpenBlock: true, // убирает кнопку "Открыть в Яндекс.Картах"
+        yandexMapDisablePoiInteractivity: true // отключает интерактивность точек интереса
       });
       placemark = new ymaps.Placemark(centerCoords, { hintContent: "Вы здесь!" }, {
         iconLayout: 'default#image',
-        iconImageHref: 'https://example.com/my-marker.png', // замените на нужный URL или удалите для стандартной метки
+        iconImageHref: 'https://example.com/my-marker.png', // замените на свой URL, если нужно; иначе удалите этот параметр
         iconImageSize: [30, 42],
         iconImageOffset: [-15, -42]
       });
@@ -70,19 +81,18 @@
       // Генерация тумана для расширенной видимой области
       generateFogForCurrentBounds();
 
-      // Используем событие actionend, которое срабатывает после завершения панорамирования/зумирования
+      // Обновление тумана после завершения действий с картой (панорамирование/зум)
       map.events.add("actionend", function() {
         generateFogForCurrentBounds();
       });
     }
 
-    // Генерация тумана с расширением границ видимой области
+    // Генерация тумана на основе расширенных границ видимой области
     function generateFogForCurrentBounds() {
       if (!map) return;
 
       const zoom = map.getZoom();
       console.log("Текущий зум:", zoom);
-      // Если зум слишком маленький, пропускаем генерацию (чтобы не генерировать слишком много гексов)
       if (zoom < 10) {
         console.log("Слишком большой охват, генерация тумана пропущена");
         clearFogOverlays();
@@ -99,25 +109,15 @@
       const sw = bounds[0]; // юго-запад: [lat, lng]
       const ne = bounds[1]; // северо-восток: [lat, lng]
 
-      // Вычисляем разницу в координатах
       const latDiff = ne[0] - sw[0];
       const lngDiff = ne[1] - sw[1];
-      // Коэффициент расширения (например, 10% = 0.1)
-      const marginFactor = 0.1;
+      const marginFactor = 0.1; // расширение на 10%
 
-      // Расширяем границы
-      const expandedSW = [
-        sw[0] - latDiff * marginFactor,
-        sw[1] - lngDiff * marginFactor
-      ];
-      const expandedNE = [
-        ne[0] + latDiff * marginFactor,
-        ne[1] + lngDiff * marginFactor
-      ];
+      const expandedSW = [ sw[0] - latDiff * marginFactor, sw[1] - lngDiff * marginFactor ];
+      const expandedNE = [ ne[0] + latDiff * marginFactor, ne[1] + lngDiff * marginFactor ];
       const expandedNW = [expandedNE[0], expandedSW[1]];
       const expandedSE = [expandedSW[0], expandedNE[1]];
 
-      // Полигон для генерации H3-ячейки (порядок: SW, SE, NE, NW)
       const extendedPolygon = [expandedSW, expandedSE, expandedNE, expandedNW];
 
       const hexagons = h3.polyfill(extendedPolygon, H3_RESOLUTION);
@@ -137,7 +137,6 @@
       console.log("Туман обновлён для расширенной области");
     }
 
-    // Функция для очистки всех полигона тумана
     function clearFogOverlays() {
       for (const hex in fogOverlays) {
         map.geoObjects.remove(fogOverlays[hex]);
@@ -145,7 +144,6 @@
       fogOverlays = {};
     }
 
-    // Отслеживание геолокации (watchPosition)
     function startTracking() {
       if (!navigator.geolocation) {
         alert("Геолокация не поддерживается вашим браузером");
@@ -155,8 +153,6 @@
         (position) => {
           const lat = position.coords.latitude;
           const lon = position.coords.longitude;
-          console.log("Новая позиция:", lat, lon);
-          document.getElementById("status").innerText = `Ваши координаты: ${lat}, ${lon}`;
           updateMap([lat, lon]);
           sendLocationToServer(lat, lon);
           updateFog(lat, lon);
@@ -168,15 +164,11 @@
       );
     }
 
-    // Обновление метки и опционально центра карты
     function updateMap(coords) {
       if (!map || !placemark) return;
       placemark.geometry.setCoordinates(coords);
-      // Если нужно, чтобы карта всегда следовала за пользователем, раскомментируйте:
-      // map.setCenter(coords);
     }
 
-    // Отправка координат на сервер (FastAPI)
     function sendLocationToServer(lat, lon) {
       const payload = { latitude: lat, longitude: lon, timestamp: Date.now() };
       fetch("http://127.0.0.1:8000/location", {
@@ -189,7 +181,6 @@
       .catch(error => console.error("Ошибка отправки локации:", error));
     }
 
-    // Обновление тумана: помечаем текущую H3-ячейку как посещённую и убираем её полигон
     function updateFog(lat, lon) {
       const h3Index = h3.geoToH3(lat, lon, H3_RESOLUTION);
       console.log("Пользователь находится в ячейке:", h3Index);
