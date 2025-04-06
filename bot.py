@@ -1,24 +1,33 @@
+import asyncio
 from aiogram import Bot, Dispatcher, types
-from aiogram.types import WebAppInfo
-from aiogram.utils import executor
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, WebAppInfo
+from aiogram.filters import Command
 
 TOKEN = "7600839520:AAGEMgJzjbwQsSjqYTzQ2sMemCEa2nib8i4"
-bot = Bot(token=TOKEN)
-dp = Dispatcher(bot)
+WEB_APP_URL = "https://tour-turum-webapp.vercel.app"  # Проверь, что URL правильный
 
-@dp.message_handler(commands=["start"])
+bot = Bot(token=TOKEN)
+dp = Dispatcher()
+
+@dp.message(Command("start"))
 async def start(message: types.Message):
-    keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    button = types.KeyboardButton("Открыть карту", web_app=WebAppInfo(url="https://YOUR-WEB-APP-URL"))
-    keyboard.add(button)
+    keyboard = ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="Открыть карту", web_app=WebAppInfo(url=WEB_APP_URL))]
+        ],
+        resize_keyboard=True
+    )
 
     await message.answer("Привет! Нажми кнопку, чтобы открыть карту.", reply_markup=keyboard)
 
-@dp.message_handler(content_types=types.ContentType.WEB_APP_DATA)
+@dp.message()
 async def web_app_data_handler(message: types.Message):
-    data = message.web_app_data.data
-    await message.answer(f"Получены данные: {data}")
+    if message.web_app_data:
+        data = message.web_app_data.data
+        await message.answer(f"Получены данные: {data}")
+
+async def main():
+    await dp.start_polling(bot)
 
 if __name__ == "__main__":
-    from aiogram import executor
-    executor.start_polling(dp, skip_updates=True)
+    asyncio.run(main())

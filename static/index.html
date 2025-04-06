@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Tour-Turum</title>
+  <!-- Замените YOUR_YANDEX_API_KEY на ваш действительный ключ Яндекс.Карт -->
+  <script src="https://api-maps.yandex.ru/2.1/?apikey=62a29c63-0004-4097-b086-05024568e9cd&lang=ru_RU"></script>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <!-- Подключаем H3-библиотеку -->
+  <script src="https://unpkg.com/h3-js@3.7.2/dist/h3-js.umd.js"></script>
+  <style>
+    body { font-family: Arial, sans-serif; text-align: center; }
+    #map { width: 100%; height: 500px; margin-top: 20px; }
+  </style>
+</head>
+<body>
+  <h1>Tour-Turum</h1>
+  <div id="map"></div>
+  <p id="status"></p>
+
+  <script>
+    let map, placemark;
+    let fogOverlays = {};    // текущие отрисованные полигоны тумана
+    let visitedHexes = {};   // посещённые H3-ячейки
+
+    // Уровень разрешения H3 (чем выше число, тем мельче ячейки, так что для меньших гексов можно увеличить число)
+    const H3_RESOLUTION = 9;
+
+    // Запасной центр (если геолокация не доступна) – Нижний Новгород
+    const FALLBACK_CENTER = [56.326887, 44.005986];
+    const FALLBACK_ZOOM = 12;
+
+    window.onload = function() {
+      if (window.Telegram && Telegram.WebApp) {
+        Telegram.WebApp.ready();
+        console.log("Telegram WebApp готов");
+      }
+      // Сначала пытаемся получить координаты пользователя
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          const lat = pos.coords.latitude;
+          const lon = pos.coords.longitude;
+          console.log("Геолокация получена:", lat, lon);
+          ymaps.ready(() => initMap([lat, lon], 14)); // например, зум 14 для детальности
+        },
+        (err) => {
+          console.warn("Не удалось получить геолокацию:", err.message);
+          ymaps.ready(() => initMap(FALLBACK_CENTER, FALLBACK_ZOOM));
+        },
+        { enableHighAccuracy: true, timeout: 10000 }
+      );
+      startTracking();
+    };
+
+    function initMap(centerCoords, zoomLevel) {
+      map = new ymaps.Map("map", {
+        center: centerCoords,
+        zoom: zoomLevel,
+        controls: []
+      });
+      placemark = new ymaps.Placemark(centerCoords, { hintContent: "Вы здесь!" }, {
+        iconLayout: 'default#image',
+        iconImageHref: 'https://example.com/my-marker.png', // замените на нужный URL или удалите для стандартной метки
+        iconImageSize: [30, 42],
+        iconImageOffset: [-15, -42]
+      });
+      map.geoObjects.add(placemark);
+
+      // Генерация тумана для расширенной видимой области
+      generateFogForCurrentBounds();
+
+      // Используем событие actionend, которое срабатывает после завершения панорамирования/зумирования
+      map.events.add("actionend", function() {
+        generateFogForCurrentBounds();
+      });
+    }
+
+    // Генерация тумана с расширением границ видимой области
+    function generateFogForCurrentBounds() {
+      if (!map) return;
+
+      const zoom = map.getZoom();
+      console.log("Текущий зум:", zoom);
+      // Если зум слишком маленький, пропускаем генерацию (чтобы не генерировать слишком много гексов)
+      if (zoom < 10) {
+        console.log("Слишком большой охват, генерация тумана пропущена");
+        clearFogOverlays();
+        return;
+      }
+
+      clearFogOverlays();
+
+      const bounds = map.getBounds();
+      if (!bounds) {
+        console.error("Не удалось получить границы карты");
+        return;
+      }
+      const sw = bounds[0]; // юго-запад: [lat, lng]
+      const ne = bounds[1]; // северо-восток: [lat, lng]
+
+      // Вычисляем разницу в координатах
+      const latDiff = ne[0] - sw[0];
+      const lngDiff = ne[1] - sw[1];
+      // Коэффициент расширения (например, 10% = 0.1)
+      const marginFactor = 0.1;
+
+      // Расширяем границы
+      const expandedSW = [
+        sw[0] - latDiff * marginFactor,
+        sw[1] - lngDiff * marginFactor
+      ];
+      const expandedNE = [
+        ne[0] + latDiff * marginFactor,
+        ne[1] + lngDiff * marginFactor
+      ];
+      const expandedNW = [expandedNE[0], expandedSW[1]];
+      const expandedSE = [expandedSW[0], expandedNE[1]];
+
+      // Полигон для генерации H3-ячейки (порядок: SW, SE, NE, NW)
+      const extendedPolygon = [expandedSW, expandedSE, expandedNE, expandedNW];
+
+      const hexagons = h3.polyfill(extendedPolygon, H3_RESOLUTION);
+      console.log("Генерация тумана. Ячеек:", hexagons.length);
+
+      hexagons.forEach(hexId => {
+        if (visitedHexes[hexId]) return;
+        let boundary = h3.h3ToGeoBoundary(hexId, true);
+        let ymapsBoundary = boundary.map(coord => [coord[1], coord[0]]);
+        let polygon = new ymaps.Polygon([ymapsBoundary], {}, {
+          fillColor: "#00000080",
+          strokeWidth: 0
+        });
+        map.geoObjects.add(polygon);
+        fogOverlays[hexId] = polygon;
+      });
+      console.log("Туман обновлён для расширенной области");
+    }
+
+    // Функция для очистки всех полигона тумана
+    function clearFogOverlays() {
+      for (const hex in fogOverlays) {
+        map.geoObjects.remove(fogOverlays[hex]);
+      }
+      fogOverlays = {};
+    }
+
+    // Отслеживание геолокации (watchPosition)
+    function startTracking() {
+      if (!navigator.geolocation) {
+        alert("Геолокация не поддерживается вашим браузером");
+        return;
+      }
+      navigator.geolocation.watchPosition(
+        (position) => {
+          const lat = position.coords.latitude;
+          const lon = position.coords.longitude;
+          console.log("Новая позиция:", lat, lon);
+          document.getElementById("status").innerText = `Ваши координаты: ${lat}, ${lon}`;
+          updateMap([lat, lon]);
+          sendLocationToServer(lat, lon);
+          updateFog(lat, lon);
+        },
+        (error) => {
+          console.error("Ошибка watchPosition:", error.message);
+        },
+        { enableHighAccuracy: true, maximumAge: 5000, timeout: 10000 }
+      );
+    }
+
+    // Обновление метки и опционально центра карты
+    function updateMap(coords) {
+      if (!map || !placemark) return;
+      placemark.geometry.setCoordinates(coords);
+      // Если нужно, чтобы карта всегда следовала за пользователем, раскомментируйте:
+      // map.setCenter(coords);
+    }
+
+    // Отправка координат на сервер (FastAPI)
+    function sendLocationToServer(lat, lon) {
+      const payload = { latitude: lat, longitude: lon, timestamp: Date.now() };
+      fetch("http://127.0.0.1:8000/location", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      })
+      .then(response => response.json())
+      .then(data => console.log("Сервер ответил:", data))
+      .catch(error => console.error("Ошибка отправки локации:", error));
+    }
+
+    // Обновление тумана: помечаем текущую H3-ячейку как посещённую и убираем её полигон
+    function updateFog(lat, lon) {
+      const h3Index = h3.geoToH3(lat, lon, H3_RESOLUTION);
+      console.log("Пользователь находится в ячейке:", h3Index);
+      visitedHexes[h3Index] = true;
+      if (fogOverlays[h3Index]) {
+        map.geoObjects.remove(fogOverlays[h3Index]);
+        delete fogOverlays[h3Index];
+      }
+    }
+  </script>
+</body>
+</html>
