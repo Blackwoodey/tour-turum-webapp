@@ -4,10 +4,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 import sqlite3
+import h3
 
 app = FastAPI()
 
-# Разрешаем CORS для разработки
+# Разрешаем запросы с любых сайтов (для тестов)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -16,43 +17,66 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Модель для POST-запроса
+# Структура запроса от клиента
 class LocationData(BaseModel):
+    user_id: str
     latitude: float
     longitude: float
     timestamp: int
 
-# Инициализация базы данных SQLite
+# Подключаемся к базе
 conn = sqlite3.connect("locations.db", check_same_thread=False)
 cursor = conn.cursor()
+
+# Таблица для истории перемещений
 cursor.execute('''
     CREATE TABLE IF NOT EXISTS locations (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id TEXT,
         latitude REAL,
         longitude REAL,
         timestamp INTEGER
     )
 ''')
+
+# Таблица для уже открытых H3-зон
+cursor.execute('''
+    CREATE TABLE IF NOT EXISTS visited_cells (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id TEXT,
+        h3_index TEXT,
+        UNIQUE(user_id, h3_index)
+    )
+''')
 conn.commit()
 
-# Ваши маршруты (эндпоинты) — работают как обычно
 @app.post("/location")
 async def receive_location(data: LocationData):
+    # Сохраняем координаты
     cursor.execute(
-        'INSERT INTO locations (latitude, longitude, timestamp) VALUES (?, ?, ?)',
-        (data.latitude, data.longitude, data.timestamp)
+        'INSERT INTO locations (user_id, latitude, longitude, timestamp) VALUES (?, ?, ?, ?)',
+        (data.user_id, data.latitude, data.longitude, data.timestamp)
     )
+
+    # Вычисляем H3-ячейку (уровень детализации 9)
+    h3_index = h3.geo_to_h3(data.latitude, data.longitude, 9)
+
+    # Сохраняем ячейку, если раньше её не было
+    cursor.execute(
+        'INSERT OR IGNORE INTO visited_cells (user_id, h3_index) VALUES (?, ?)',
+        (data.user_id, h3_index)
+    )
+
     conn.commit()
-    return JSONResponse({"status": "ok", "message": "Location saved"})
+    return JSONResponse({"status": "ok", "h3_index": h3_index})
 
-@app.get("/progress")
-async def get_progress():
-    cursor.execute('SELECT latitude, longitude, timestamp FROM locations')
+@app.get("/visited")
+async def get_visited(user_id: str):
+    cursor.execute('SELECT h3_index FROM visited_cells WHERE user_id = ?', (user_id,))
     rows = cursor.fetchall()
-    return JSONResponse({"locations": rows})
+    return JSONResponse({"visited": [row[0] for row in rows]})
 
-# Монтируем папку static на адрес /static
-# => index.html будет доступен по /static/index.html
+# Раздаём статику
 app.mount("/static", StaticFiles(directory="static", html=True), name="static")
 
 if __name__ == '__main__':
