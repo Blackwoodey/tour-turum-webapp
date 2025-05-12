@@ -3,7 +3,7 @@ from aiogram import Bot, Dispatcher, types
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, WebAppInfo
 from aiogram.filters import Command
 
-TOKEN = "7600839520:AAGEMgJzjbwQsSjqYTzQ2sMemCEa2nib8i4"
+TOKEN = "8058130669:AAFnKlYEBjyo3tGzIdNh8qeBRMaRsTryZ9I"
 WEB_APP_URL = "https://tour-turum-webapp.vercel.app"  # Проверь, что URL правильный
 
 bot = Bot(token=TOKEN)
